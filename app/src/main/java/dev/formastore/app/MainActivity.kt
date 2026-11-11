@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -54,6 +55,7 @@ private fun FormaApp(model: StoreModel = viewModel()) {
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf("Все") }
     var favorites by rememberSaveable { mutableStateOf(false) }
+    var allApps by rememberSaveable { mutableStateOf(false) }
     var detail by remember { mutableStateOf<StoreApp?>(null) }
     var about by rememberSaveable { mutableStateOf(false) }
     var settings by rememberSaveable { mutableStateOf(false) }
@@ -61,9 +63,17 @@ private fun FormaApp(model: StoreModel = viewModel()) {
     var showHistory by rememberSaveable { mutableStateOf(false) }
     var history by remember { mutableStateOf(context.getSharedPreferences("search", 0).getString("history", "")!!.split('\n').filter(String::isNotBlank)) }
     var savedAt by remember { mutableLongStateOf(0) }
-    val list0 = rememberLazyListState(); val list1 = rememberLazyListState(); val list2 = rememberLazyListState()
+    val listHome = rememberLazyListState(); val list0 = rememberLazyListState(); val list1 = rememberLazyListState(); val list2 = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
+    val storefront = tab == 0 && !allApps && query.isBlank() && category == "Все" && !favorites
     fun open(url: String) { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { model.message("Не найден браузер") } }
+    fun showApp(app: StoreApp) {
+        if (query.isNotBlank()) {
+            history = (listOf(query.trim().replace('\n', ' ')) + history).distinct().take(8)
+            context.getSharedPreferences("search", 0).edit().putString("history", history.joinToString("\n")).apply()
+        }
+        detail = app
+    }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) model.rescan() }
         lifecycle.lifecycle.addObserver(observer)
@@ -71,7 +81,9 @@ private fun FormaApp(model: StoreModel = viewModel()) {
     }
     LaunchedEffect(state.message) { state.message?.let { snackbar.showSnackbar(it); model.message(null) } }
     LaunchedEffect(state.apps, state.loading) { savedAt = withContext(Dispatchers.IO) { CatalogCache(context).use { runCatching { it.savedAt() }.getOrDefault(0) } } }
-    BackHandler(query.isNotEmpty() && detail == null && !settings && !about && !downloads && !showHistory && state.release == null && state.ready == null) { query = "" }
+    BackHandler((query.isNotEmpty() || allApps || category != "Все" || favorites) && detail == null && !settings && !about && !downloads && !showHistory && state.release == null && state.ready == null) {
+        query = ""; allApps = false; category = "Все"; favorites = false
+    }
     val results by produceState(emptyList<StoreApp>(), state.apps, state.installed, state.ignored, state.favorites, tab, query, category, favorites) {
         kotlinx.coroutines.delay(120)
         value = withContext(Dispatchers.Default) { state.apps.filter { a ->
@@ -85,7 +97,7 @@ private fun FormaApp(model: StoreModel = viewModel()) {
     val updates = remember(state.apps, state.installed, state.ignored) { state.apps.count { a -> a.id !in state.ignored && state.installed[a.id]?.let { it < a.code } == true } }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = {
         Column {
-            TopAppBar(title = { Text("Forma") }, actions = {
+            TopAppBar(title = { Text("forma", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineMedium) }, actions = {
                 IconButton(enabled = !state.loading, onClick = { model.refresh(true) }) { Icon(Icons.Outlined.Refresh, "Обновить каталог") }
                 IconButton(enabled = !state.checking, onClick = { model.checkRelease(true) }) {
                     if (state.checking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.SystemUpdateAlt, "Обновить Forma")
@@ -93,10 +105,10 @@ private fun FormaApp(model: StoreModel = viewModel()) {
                 IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Tune, "Настройки") }
                 IconButton(onClick = { about = true }) { Icon(Icons.Outlined.Info, "О магазине") }
             })
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 8.dp), placeholder = { Text("Поиск приложений") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, trailingIcon = {
+            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 8.dp), placeholder = { Text("Что откроем сегодня?") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, trailingIcon = {
                 if (query.isNotBlank()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Очистить") }
                 else IconButton(onClick = { showHistory = true }) { Icon(Icons.Outlined.History, "История") }
-            }, singleLine = true, shape = RoundedCornerShape(28.dp))
+            }, singleLine = true, shape = RoundedCornerShape(30.dp), colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainerLow))
         }
     }, bottomBar = {
         Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
@@ -104,15 +116,18 @@ private fun FormaApp(model: StoreModel = viewModel()) {
             FormaNavigation(tab, updates) { tab = it }
         }
     }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), state = when(tab) { 0 -> list0; 1 -> list1; else -> list2 }, contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding), state = if (storefront) listHome else when(tab) { 0 -> list0; 1 -> list1; else -> list2 }, contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (storefront && state.apps.isNotEmpty()) item(key = "storefront") {
+                Storefront(state.apps, ::showApp, { category = it; allApps = true }, { allApps = true })
+            }
             item(key = "status") {
                 val stamp = if (savedAt == 0L) "Каталог не сохранён" else "Каталог: " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(savedAt))
-                Text(stamp + if (state.loading) " · обновляем…" else " · локальная копия", style = MaterialTheme.typography.labelSmall)
+                Text(stamp + if (state.loading) " · обновляем…" else " · локальная копия", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!state.online) Text("Офлайн · сохранённые приложения доступны", style = MaterialTheme.typography.labelSmall)
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 state.catalogError?.let { Text("Ошибка обновления: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
-            item(key = "filters") {
+            if (!storefront) item(key = "filters") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     FilterChip(favorites, { favorites = !favorites }, label = { Text("Избранное ${state.favorites.size}") })
                     var expanded by remember { mutableStateOf(false) }
@@ -121,26 +136,34 @@ private fun FormaApp(model: StoreModel = viewModel()) {
                         DropdownMenu(expanded, { expanded = false }) { categories.forEach { c -> DropdownMenuItem(text = { Text(c) }, onClick = { category = c; expanded = false }) } }
                     }
                 }
+                if (tab == 0) TextButton(onClick = { query = ""; category = "Все"; favorites = false; allApps = false }) { Text("← На витрину") }
                 if (query.isNotBlank() || category != "Все" || favorites) TextButton(onClick = { query = ""; category = "Все"; favorites = false }) { Text("Сбросить фильтры") }
             }
             if (tab == 1 && results.isNotEmpty()) item(key = "all-updates") {
-                FilledTonalButton(onClick = { results.forEach(model::install) }, modifier = Modifier.fillMaxWidth()) { Text("Скачать все · ${results.size}") }
+                Text("Время освежиться.", style = MaterialTheme.typography.headlineMedium)
+                FilledTonalButton(onClick = { results.forEach(model::install) }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Скачать все · ${results.size}") }
                 Text("Каждая установка подтверждается в Android.", style = MaterialTheme.typography.bodySmall)
             }
             if (state.apps.isEmpty()) item(key = "empty") {
-                ElevatedCard(shape = RoundedCornerShape(28.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(painterResource(R.drawable.ic_peek_mono), null, Modifier.size(65.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text("Твои приложения.\nБез аккаунта.", style = MaterialTheme.typography.headlineMedium)
-                        Text(if (state.loading) "Проверяем подписанный каталог F-Droid…" else "Загрузи каталог, чтобы начать.")
-                        if (!state.loading) Button(onClick = { model.refresh(true) }) { Text("Загрузить каталог") }
+                ElevatedCard(shape = RoundedCornerShape(32.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(26.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Icon(painterResource(R.drawable.ic_peek_mono), null, Modifier.size(75.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("Хорошие приложения.\nБез лишнего.", style = MaterialTheme.typography.headlineLarge)
+                        Text(if (state.loading) "Загружаем и проверяем подписанный каталог F-Droid…" else "Один каталог. Тысячи открытых возможностей.")
+                        if (!state.loading) Button(onClick = { model.refresh(true) }) { Text("Открыть каталог") }
                     }
                 }
-            } else if (results.isEmpty()) item(key = "no-results") {
-                Text(if (tab == 1 && state.catalogError == null) "В сохранённом каталоге нет обновлений по этим фильтрам." else "Ничего не найдено. Проверь фильтры или обнови каталог.")
+            } else if (!storefront && results.isEmpty()) item(key = "no-results") {
+                Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(if (tab == 1) Icons.Outlined.CheckCircleOutline else Icons.Outlined.SearchOff, null, Modifier.size(36.dp))
+                        Text(if (tab == 1 && state.catalogError == null) "Пока всё свежее." else "Здесь пока пусто.", style = MaterialTheme.typography.titleLarge)
+                        Text("Проверь фильтры и дату каталога.", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
-            items(results, key = { it.id }) { app ->
-                ListItem(headlineContent = { Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = {
+            if (!storefront) items(results, key = { it.id }) { app ->
+                ListItem(colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow), headlineContent = { Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = {
                     Column {
                         Text(app.summary.ifBlank { app.id }, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (tab == 1) Text("${installedVersion(context, app.id)} → ${app.version} · ${sizeLabel(app.size)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -149,15 +172,9 @@ private fun FormaApp(model: StoreModel = viewModel()) {
                     val installed = state.installed[app.id]
                     if (installed != null && app.code > installed && app.id !in state.ignored) FilledTonalIconButton(onClick = { model.install(app) }) { Icon(Icons.Outlined.Download, "Обновить ${app.name}") }
                     else if (installed != null) Icon(Icons.Outlined.Check, "Установлено")
-                }, modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable {
-                    if (query.isNotBlank()) {
-                        history = (listOf(query.trim().replace('\n', ' ')) + history).distinct().take(8)
-                        context.getSharedPreferences("search", 0).edit().putString("history", history.joinToString("\n")).apply()
-                    }
-                    detail = app
-                })
+                }, modifier = Modifier.clip(RoundedCornerShape(24.dp)).clickable { showApp(app) })
             }
-            item(key = "footer") { Text("F-Droid · ${BuildConfig.VERSION_NAME} · универсальный APK", style = MaterialTheme.typography.bodySmall) }
+            item(key = "footer") { Text("F-Droid · ${BuildConfig.VERSION_NAME} · независимый магазин", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
     if (settings) StoreSettings(state, model) { settings = false }
@@ -169,9 +186,7 @@ private fun FormaApp(model: StoreModel = viewModel()) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Загрузки", style = MaterialTheme.typography.headlineSmall)
             if (state.progress != null || state.ready != null) TransferCard(state) { }
-            state.queueNames.forEachIndexed { i, name ->
-                Row { Text(name, Modifier.weight(1f)); IconButton(onClick = { model.removeQueued(i) }) { Icon(Icons.Outlined.Close, "Убрать из очереди") } }
-            }
+            state.queueNames.forEachIndexed { i, name -> Row { Text(name, Modifier.weight(1f)); IconButton(onClick = { model.removeQueued(i) }) { Icon(Icons.Outlined.Close, "Убрать из очереди") } } }
             Text("После остановки процесса загрузка начнётся заново. Проверенные APK ожидают подтверждения установки.", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = model::cancelDownload) { Text("Отменить загрузку и очередь") }
             Button(onClick = { downloads = false }) { Text("Готово") }
