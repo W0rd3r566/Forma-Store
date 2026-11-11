@@ -2,7 +2,7 @@ name: Signed release
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/release.yml']
+    paths: ['.github/workflows/release.yml', 'scripts/verify-release.py']
     tags: ['v*']
   workflow_dispatch:
 permissions:
@@ -20,6 +20,8 @@ jobs:
       FORMA_KEY_ALIAS: ${{ secrets.FORMA_KEY_ALIAS }}
       FORMA_KEY_PASSWORD: ${{ secrets.FORMA_KEY_PASSWORD }}
       FORMA_KEYSTORE_PATH: ${{ github.workspace }}/forma-release.jks
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - name: Load signing key
@@ -42,29 +44,13 @@ jobs:
           gradle-version: '8.11.1'
       - name: Build and validate
         run: gradle --no-daemon --stacktrace :app:testReleaseUnitTest :app:assembleRelease :app:lintRelease
-      - name: Verify signed APK and previous release identity
-        id: apk
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+      - name: Fetch previous published APK
         run: |
-          APK=app/build/outputs/apk/release/app-release.apk
-          TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
-          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          VERSION=$("$TOOLS/aapt" dump badging "$APK" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
-          test -n "$VERSION"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then test "${GITHUB_REF#refs/tags/}" = "v$VERSION"; fi
-          if gh release view >/dev/null 2>&1; then
-            mkdir previous-release
-            gh release download --pattern forma-store.apk --dir previous-release
-            "$TOOLS/apksigner" verify previous-release/forma-store.apk
-            OLD=$("$TOOLS/apksigner" verify --print-certs previous-release/forma-store.apk | grep 'Signer #1 certificate SHA-256 digest:')
-            NEW=$("$TOOLS/apksigner" verify --print-certs "$APK" | grep 'Signer #1 certificate SHA-256 digest:')
-            test "$OLD" = "$NEW" || { echo 'Signing certificate changed; publication blocked'; exit 1; }
-          fi
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          cp "$APK" forma-store.apk
-          sha256sum forma-store.apk > forma-store.apk.sha256
+          mkdir -p previous-release
+          gh release download v0.1.0 --pattern forma-store.apk --dir previous-release
+      - name: Verify APK, package version and signing continuity
+        id: apk
+        run: python3 scripts/verify-release.py
       - uses: actions/upload-artifact@v4
         with:
           name: forma-store-signed
@@ -73,14 +59,22 @@ jobs:
             forma-store.apk.sha256
       - name: Publish stable release
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.apk.outputs.tag }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo 'Existing version will not be overwritten.'
             exit 0
           fi
-          gh release create "$RELEASE_TAG" forma-store.apk forma-store.apk.sha256 --target "$GITHUB_SHA" --title "Forma Store $RELEASE_TAG" --notes 'Pinned search and search history; app screenshot gallery and release notes where F-Droid provides them; expandable descriptions; Open and Share; version comparison and download-all; persistent download queue with foreground transfer notification; install outcome reconciliation; light/dark/system themes, wallpaper colors, reduced dock motion; JSON settings backup. Android may terminate transfers: interrupted APK downloads restart from zero. Install reconciliation cannot distinguish user cancellation from every system rejection. Media metadata currently re-reads the verified index on opening a detail page, which may take time. Same certificate as the prior release is checked in CI.'
+          gh release create "$RELEASE_TAG" forma-store.apk forma-store.apk.sha256 --target "$GITHUB_SHA" --title "Forma Store $RELEASE_TAG" --notes-file docs/RELEASE-0.2.0.md
+      - name: Upload non-secret verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-diagnostics
+          path: |
+            verification-report.txt
+            app/build/reports/
+          if-no-files-found: ignore
       - name: Clean signing key
         if: always()
         run: rm -f "$FORMA_KEYSTORE_PATH"
