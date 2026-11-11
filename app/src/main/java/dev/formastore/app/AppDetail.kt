@@ -35,6 +35,7 @@ internal fun AppDetail(app: StoreApp, state: StoreState, model: StoreModel, clos
     val installed = state.installed[app.id]
     var expanded by remember(app.id) { mutableStateOf(false) }
     var gallery by remember(app.id) { mutableIntStateOf(-1) }
+    val media by produceState(AppMedia(), app.id) { value = appMedia(context, app.id) }
     fun open(url: String) { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { model.message("Не найден браузер") } }
     ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp * .88f).dp)) {
@@ -46,42 +47,38 @@ internal fun AppDetail(app: StoreApp, state: StoreState, model: StoreModel, clos
             }
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(app.summary, style = MaterialTheme.typography.titleMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    item { SuggestionChip(onClick = {}, label = { Text(app.version) }) }
-                    item { SuggestionChip(onClick = {}, label = { Text(sizeLabel(app.size)) }) }
-                    item { SuggestionChip(onClick = {}, label = { Text(app.license) }) }
-                }
+                Text("${app.version} · ${sizeLabel(app.size)} · ${app.license}", style = MaterialTheme.typography.labelLarge)
                 if (installed != null && installed < app.code) Text("${installedVersion(context, app.id)} → ${app.version}", color = MaterialTheme.colorScheme.primary)
-                if (app.screenshots.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    itemsIndexed(app.screenshots) { i, url -> AsyncImage(url, "Скриншот ${i + 1}", Modifier.height(230.dp).width(130.dp).clip(RoundedCornerShape(16.dp)).clickable { gallery = i }, contentScale = ContentScale.Crop) }
+                if (media.screenshots.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    itemsIndexed(media.screenshots) { i, url -> AsyncImage(url, "Скриншот ${i + 1}", Modifier.height(230.dp).width(130.dp).clip(RoundedCornerShape(16.dp)).clickable { gallery = i }, contentScale = ContentScale.Crop) }
                 }
-                if (app.changelog.isNotBlank()) {
+                if (media.changelog.isNotBlank()) {
                     Text("Что нового", style = MaterialTheme.typography.titleMedium)
-                    Text(app.changelog, style = MaterialTheme.typography.bodyMedium)
+                    Text(media.changelog, style = MaterialTheme.typography.bodyMedium)
                 }
                 Text("Об этом приложении", style = MaterialTheme.typography.titleMedium)
                 Text(app.description.ifBlank { "Описание не предоставлено источником." }, maxLines = if (expanded) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis)
                 if (app.description.length > 220) TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Свернуть" else "Читать дальше") }
                 Text("Перед установкой", style = MaterialTheme.typography.titleMedium)
-                Text("• Подобрано под Android и архитектуру устройства\n• Метаданные получены из проверенного индекса F-Droid\n• Хеш и подпись APK проверяются после скачивания", style = MaterialTheme.typography.bodySmall)
-                Text("Эти проверки не гарантируют отсутствие вредоносного поведения.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("• Подобрано под Android и архитектуру устройства\n• Метаданные из проверенного индекса F-Droid\n• Хеш и подпись APK проверяются после скачивания", style = MaterialTheme.typography.bodySmall)
+                Text("Проверки не гарантируют отсутствие вредоносного поведения.", style = MaterialTheme.typography.bodySmall)
                 if (app.antiFeatures.isNotEmpty()) Text("Особенности: ${app.antiFeatures.joinToString()}", color = MaterialTheme.colorScheme.error)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Скрыть из обновлений", Modifier.weight(1f)); Switch(app.id in state.ignored, { model.ignore(app.id) }) }
                 if (app.permissions.isNotEmpty()) Text("Разрешения:\n" + app.permissions.joinToString("\n"), style = MaterialTheme.typography.bodySmall)
-                if (installed != null) TextButton(onClick = { context.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.id}"))) }) { Text("Системные настройки приложения") }
+                if (installed != null) TextButton(onClick = { context.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.id}"))) }) { Text("Системные настройки") }
                 if (app.source.startsWith("https://")) TextButton(onClick = { open(app.source) }) { Icon(Icons.Outlined.Code, null); Spacer(Modifier.width(8.dp)); Text("Исходный код") }
                 TextButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, "${app.name}\nhttps://f-droid.org/packages/${app.id}/") }
-                    context.startActivity(Intent.createChooser(send, "Поделиться приложением"))
+                    context.startActivity(Intent.createChooser(send, "Поделиться"))
                 }) { Icon(Icons.Outlined.Share, null); Spacer(Modifier.width(8.dp)); Text("Поделиться") }
-                Text("Android API ${app.minSdk}+ · target ${app.targetSdk}\n${app.abis.joinToString().ifBlank { "Без нативных ограничений ABI" }}\nSHA-256: ${app.hash}", style = MaterialTheme.typography.bodySmall)
+                Text("API ${app.minSdk}+ · target ${app.targetSdk}\n${app.abis.joinToString().ifBlank { "Без ограничений ABI" }}\nSHA-256: ${app.hash}", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(8.dp))
             }
             HorizontalDivider()
             Button(onClick = {
                 if (installed != null && installed >= app.code) {
                     val launch = context.packageManager.getLaunchIntentForPackage(app.id)
-                    if (launch != null) context.startActivity(launch) else model.message("У приложения нет доступного экрана запуска")
+                    if (launch != null) context.startActivity(launch) else model.message("Нет доступного экрана запуска")
                 } else { model.install(app); close() }
             }, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).heightIn(min = 52.dp)) {
                 Icon(if (installed != null && installed >= app.code) Icons.Outlined.OpenInNew else Icons.Outlined.Download, null)
@@ -90,15 +87,15 @@ internal fun AppDetail(app: StoreApp, state: StoreState, model: StoreModel, clos
             }
         }
     }
-    if (gallery >= 0) Dialog(onDismissRequest = { gallery = -1 }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    if (gallery >= 0 && media.screenshots.isNotEmpty()) Dialog(onDismissRequest = { gallery = -1 }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            val pager = rememberPagerState(initialPage = gallery, pageCount = { app.screenshots.size })
+            val pager = rememberPagerState(initialPage = gallery, pageCount = { media.screenshots.size })
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${pager.currentPage + 1} / ${app.screenshots.size}", Modifier.weight(1f))
+                    Text("${pager.currentPage + 1} / ${media.screenshots.size}", Modifier.weight(1f))
                     IconButton(onClick = { gallery = -1 }) { Icon(Icons.Outlined.Close, "Закрыть галерею") }
                 }
-                HorizontalPager(pager, Modifier.weight(1f)) { i -> AsyncImage(app.screenshots[i], "Скриншот ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                HorizontalPager(pager, Modifier.weight(1f)) { i -> AsyncImage(media.screenshots[i], "Скриншот ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
             }
         }
     }
