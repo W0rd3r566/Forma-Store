@@ -10,8 +10,8 @@ android {
         applicationId = "dev.formastore.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100
-        versionName = "0.1.0"
+        versionCode = 200
+        versionName = "0.2.0"
     }
     val signingPath = System.getenv("FORMA_KEYSTORE_PATH")
     signingConfigs {
@@ -24,10 +24,7 @@ android {
     }
     buildTypes {
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
-        release {
-            isMinifyEnabled = false
-            if (!signingPath.isNullOrBlank()) signingConfig = signingConfigs.getByName("forma")
-        }
+        release { isMinifyEnabled = false; if (!signingPath.isNullOrBlank()) signingConfig = signingConfigs.getByName("forma") }
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

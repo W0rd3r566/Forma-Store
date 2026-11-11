@@ -1,10 +1,7 @@
 package dev.formastore.app
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -31,21 +28,16 @@ internal fun FormaNavigation(selected: Int, updates: Int, onSelect: (Int) -> Uni
             tonalElevation = 3.dp, shadowElevation = 4.dp, modifier = Modifier.widthIn(max = 440.dp).fillMaxWidth()) {
             BoxWithConstraints(Modifier.padding(6.dp)) {
                 val slot = maxWidth / 3
-                val x by animateDpAsState(slot * selected, spring(dampingRatio = .82f, stiffness = Spring.StiffnessMediumLow), label = "pill-slide")
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(30.dp),
-                    modifier = Modifier.offset(x = x).width(slot).matchParentSizeHeight()) {}
+                val x by animateDpAsState(slot * selected, if (Appearance.reduced) snap() else spring(dampingRatio = .82f, stiffness = Spring.StiffnessMediumLow), label = "pill-slide")
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(30.dp), modifier = Modifier.offset(x = x).width(slot).height(62.dp)) {}
                 Row(Modifier.fillMaxWidth().selectableGroup()) {
                     listOf("Каталог", "Обновления", "Библиотека").forEachIndexed { i, title ->
                         val active = selected == i
-                        val scale by animateFloatAsState(if (active) 1.08f else 1f, spring(dampingRatio = .55f, stiffness = 400f), label = "tab-icon")
+                        val scale by animateFloatAsState(if (active && !Appearance.reduced) 1.08f else 1f, if (Appearance.reduced) snap() else spring(dampingRatio = .55f, stiffness = 400f), label = "tab-icon")
                         val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, label = "tab-tint")
-                        Column(Modifier.weight(1f).clip(RoundedCornerShape(30.dp))
-                            .selectable(active, role = Role.Tab, onClick = { onSelect(i) })
-                            .padding(horizontal = 1.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(Modifier.weight(1f).clip(RoundedCornerShape(30.dp)).selectable(active, role = Role.Tab, onClick = { onSelect(i) }).padding(horizontal = 1.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             BadgedBox(badge = { if (i == 1 && updates > 0) Badge { Text(if (updates > 99) "99+" else "$updates") } }) {
-                                Icon(when(i) { 0 -> Icons.Outlined.Explore; 1 -> Icons.Outlined.SystemUpdate; else -> Icons.Outlined.Widgets }, null,
-                                    Modifier.size(21.dp).graphicsLayer { scaleX = scale; scaleY = scale }, tint = tint)
+                                Icon(when(i) { 0 -> Icons.Outlined.Explore; 1 -> Icons.Outlined.SystemUpdate; else -> Icons.Outlined.Widgets }, null, Modifier.size(21.dp).graphicsLayer { scaleX = scale; scaleY = scale }, tint = tint)
                             }
                             Text(title, color = tint, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -55,5 +47,3 @@ internal fun FormaNavigation(selected: Int, updates: Int, onSelect: (Int) -> Uni
         }
     }
 }
-// Fixed row height avoids measuring the highlight as content and keeps targets >=48dp.
-private fun Modifier.matchParentSizeHeight() = height(62.dp)
