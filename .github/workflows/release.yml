@@ -1,12 +1,14 @@
 name: Signed release
 on:
   push:
+    branches: [main]
+    paths: ['.github/workflows/release.yml']
     tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: release-${{ github.ref }}
+  group: signed-release
   cancel-in-progress: false
 jobs:
   release:
@@ -17,35 +19,42 @@ jobs:
       FORMA_STORE_PASSWORD: ${{ secrets.FORMA_STORE_PASSWORD }}
       FORMA_KEY_ALIAS: ${{ secrets.FORMA_KEY_ALIAS }}
       FORMA_KEY_PASSWORD: ${{ secrets.FORMA_KEY_PASSWORD }}
-      FORMA_KEYSTORE_PATH: ${{ github.workspace }}/forma-release.jks
+      FORMA_KEYSTORE_PATH: ${{ runner.temp }}/forma-release.jks
     steps:
       - uses: actions/checkout@v4
-      - name: Require persistent signing identity
+      - name: Load persistent signing identity
         shell: bash
         run: |
-          test -n "$KEYSTORE_BASE64" || { echo 'Configure persistent FORMA_* signing secrets. Never generate a fresh key per release.'; exit 1; }
-          test -n "$FORMA_STORE_PASSWORD" && test -n "$FORMA_KEY_ALIAS" && test -n "$FORMA_KEY_PASSWORD"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$FORMA_KEYSTORE_PATH"
-      - uses: actions/setup-java@v4
+          test -n "$KEYSTORE_BASE64" || { echo 'Missing FORMA_KEYSTORE_BASE64 secret'; exit 1; }
+          test -n "$FORMA_STORE_PASSWORD" || { echo 'Missing store password'; exit 1; }
+          test -n "$FORMA_KEY_ALIAS" || { echo 'Missing alias'; exit 1; }
+          test -n "$FORMA_KEY_PASSWORD" || { echo 'Missing key password'; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$FORMA_KEYSTORE_PATH"
+          chmod 600 "$FORMA_KEYSTORE_PATH"
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - name: Use installed Android SDK
+        run: |
+          test -d "$ANDROID_HOME"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build signed APK
+      - name: Test, build and lint signed release
         run: gradle --no-daemon --stacktrace :app:testReleaseUnitTest :app:assembleRelease :app:lintRelease
-      - name: Verify release and tag
+      - name: Verify signature and version
+        id: apk
         shell: bash
         run: |
           APK=app/build/outputs/apk/release/app-release.apk
           TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION=$("$TOOLS/aapt" dump badging "$APK" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
-            test "${GITHUB_REF#refs/tags/}" = "v$VERSION"
-          fi
+          VERSION=$("$TOOLS/aapt" dump badging "$APK" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+          test -n "$VERSION"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then test "${GITHUB_REF#refs/tags/}" = "v$VERSION"; fi
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           cp "$APK" forma-store.apk
           sha256sum forma-store.apk > forma-store.apk.sha256
       - uses: actions/upload-artifact@v4
@@ -54,11 +63,17 @@ jobs:
           path: |
             forma-store.apk
             forma-store.apk.sha256
-      - name: Publish tag release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish new stable version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" forma-store.apk forma-store.apk.sha256 --verify-tag --generate-notes
+          RELEASE_TAG: ${{ steps.apk.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Version already published; existing release will not be overwritten. Increment version for the next release.'
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" forma-store.apk forma-store.apk.sha256 --target "$GITHUB_SHA" --title "Forma Store $RELEASE_TAG" --notes 'First persistently signed Forma Store release. Material 3 interface, F-Droid catalog verification, local SQLite cache, favorites, update exclusions and install handoff. Background process-resilient downloads are not implemented yet. Debug builds use a separate application ID: install this release alongside debug, then use releases for future updates.'
       - name: Remove signing file
         if: always()
         run: rm -f "$FORMA_KEYSTORE_PATH"
