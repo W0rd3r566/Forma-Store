@@ -19,32 +19,30 @@ jobs:
       FORMA_STORE_PASSWORD: ${{ secrets.FORMA_STORE_PASSWORD }}
       FORMA_KEY_ALIAS: ${{ secrets.FORMA_KEY_ALIAS }}
       FORMA_KEY_PASSWORD: ${{ secrets.FORMA_KEY_PASSWORD }}
-      FORMA_KEYSTORE_PATH: ${{ runner.temp }}/forma-release.jks
+      FORMA_KEYSTORE_PATH: ${{ github.workspace }}/forma-release.jks
     steps:
       - uses: actions/checkout@v4
-      - name: Load persistent signing identity
+      - name: Load signing key
         shell: bash
         run: |
-          test -n "$KEYSTORE_BASE64" || { echo 'Missing FORMA_KEYSTORE_BASE64 secret'; exit 1; }
-          test -n "$FORMA_STORE_PASSWORD" || { echo 'Missing store password'; exit 1; }
-          test -n "$FORMA_KEY_ALIAS" || { echo 'Missing alias'; exit 1; }
-          test -n "$FORMA_KEY_PASSWORD" || { echo 'Missing key password'; exit 1; }
+          test -n "$KEYSTORE_BASE64" || { echo 'Missing FORMA_KEYSTORE_BASE64'; exit 1; }
+          test -n "$FORMA_STORE_PASSWORD" && test -n "$FORMA_KEY_ALIAS" && test -n "$FORMA_KEY_PASSWORD"
           printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$FORMA_KEYSTORE_PATH"
           chmod 600 "$FORMA_KEYSTORE_PATH"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - name: Use installed Android SDK
+      - name: Use preinstalled SDK
         run: |
           test -d "$ANDROID_HOME"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Test, build and lint signed release
+      - name: Build and validate
         run: gradle --no-daemon --stacktrace :app:testReleaseUnitTest :app:assembleRelease :app:lintRelease
-      - name: Verify signature and version
+      - name: Verify signed APK
         id: apk
         shell: bash
         run: |
@@ -63,17 +61,16 @@ jobs:
           path: |
             forma-store.apk
             forma-store.apk.sha256
-      - name: Publish new stable version
+      - name: Publish stable release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.apk.outputs.tag }}
-        shell: bash
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo 'Version already published; existing release will not be overwritten. Increment version for the next release.'
+            echo 'Existing version will not be overwritten. Increment version for next release.'
             exit 0
           fi
-          gh release create "$RELEASE_TAG" forma-store.apk forma-store.apk.sha256 --target "$GITHUB_SHA" --title "Forma Store $RELEASE_TAG" --notes 'First persistently signed Forma Store release. Material 3 interface, F-Droid catalog verification, local SQLite cache, favorites, update exclusions and install handoff. Background process-resilient downloads are not implemented yet. Debug builds use a separate application ID: install this release alongside debug, then use releases for future updates.'
-      - name: Remove signing file
+          gh release create "$RELEASE_TAG" forma-store.apk forma-store.apk.sha256 --target "$GITHUB_SHA" --title "Forma Store $RELEASE_TAG" --notes 'First persistently signed release. Verified F-Droid catalog, SQLite cache, favorites, exclusions, Material 3 dock and GitHub self-updates. Background downloads after process termination are not implemented. Install this production APK alongside the separate debug application; use signed releases for future updates.'
+      - name: Clean signing key
         if: always()
         run: rm -f "$FORMA_KEYSTORE_PATH"
