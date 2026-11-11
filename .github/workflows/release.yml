@@ -1,0 +1,64 @@
+name: Signed release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KEYSTORE_BASE64: ${{ secrets.FORMA_KEYSTORE_BASE64 }}
+      FORMA_STORE_PASSWORD: ${{ secrets.FORMA_STORE_PASSWORD }}
+      FORMA_KEY_ALIAS: ${{ secrets.FORMA_KEY_ALIAS }}
+      FORMA_KEY_PASSWORD: ${{ secrets.FORMA_KEY_PASSWORD }}
+      FORMA_KEYSTORE_PATH: ${{ github.workspace }}/forma-release.jks
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require persistent signing identity
+        shell: bash
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo 'Configure persistent FORMA_* signing secrets. Never generate a fresh key per release.'; exit 1; }
+          test -n "$FORMA_STORE_PASSWORD" && test -n "$FORMA_KEY_ALIAS" && test -n "$FORMA_KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$FORMA_KEYSTORE_PATH"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build signed APK
+        run: gradle --no-daemon --stacktrace :app:testReleaseUnitTest :app:assembleRelease :app:lintRelease
+      - name: Verify release and tag
+        shell: bash
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=$("$TOOLS/aapt" dump badging "$APK" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+            test "${GITHUB_REF#refs/tags/}" = "v$VERSION"
+          fi
+          cp "$APK" forma-store.apk
+          sha256sum forma-store.apk > forma-store.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forma-store-signed
+          path: |
+            forma-store.apk
+            forma-store.apk.sha256
+      - name: Publish tag release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" forma-store.apk forma-store.apk.sha256 --verify-tag --generate-notes
+      - name: Remove signing file
+        if: always()
+        run: rm -f "$FORMA_KEYSTORE_PATH"

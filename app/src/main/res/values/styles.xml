@@ -1,0 +1,1 @@
+<resources><style name="Theme.Forma" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item><item name="android:windowBackground">#F7F8FC</item></style><color name="icon_background">#DCE6FF</color></resources>
